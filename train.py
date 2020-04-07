@@ -5,9 +5,7 @@ import torch.autograd as autograd
 import torch.nn.functional as F
 
 
-def train(train_iter, dev_iter, model, args):
-    if args.cuda:
-        model.cuda()
+def train(train_iter, dev_iter, model, args, device):
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -15,12 +13,12 @@ def train(train_iter, dev_iter, model, args):
     best_acc = 0
     last_step = 0
     model.train()
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(1, args.epochs + 1):
         for batch in train_iter:
             feature, target = batch.text, batch.label
-            feature.data.t_(), target.data.sub_(1)  # batch first, index align
-            if args.cuda:
-                feature, target = feature.cuda(), target.cuda()
+            feature.t_(), target.sub_(1)  # batch first, index align
+            feature = feature.to(device)
+            target = target.to(device)
 
             optimizer.zero_grad()
             logit = model(feature)
@@ -33,16 +31,15 @@ def train(train_iter, dev_iter, model, args):
 
             steps += 1
             if steps % args.log_interval == 0:
-                corrects = (torch.max(logit, 1)[1].view(target.size()).data == target.data).sum()
-                accuracy = 100.0 * corrects/batch.batch_size
+                corrects = (torch.max(logit, 1)[1].view(
+                    target.size()) == target).sum()
+                accuracy = 100.0 * corrects / batch.batch_size
                 sys.stdout.write(
-                    '\rBatch[{}] - loss: {:.6f}  acc: {:.4f}%({}/{})'.format(steps, 
-                                                                             loss.data[0], 
-                                                                             accuracy,
-                                                                             corrects,
-                                                                             batch.batch_size))
+                    '\rBatch[{}] - loss: {:.6f}  acc: {:.4f}%({}/{})'.format(
+                        steps, loss.item(), accuracy, corrects,
+                        batch.batch_size))
             if steps % args.test_interval == 0:
-                dev_acc = eval(dev_iter, model, args)
+                dev_acc = eval(dev_iter, model, args, device)
                 if dev_acc > best_acc:
                     best_acc = dev_acc
                     last_step = steps
@@ -50,52 +47,49 @@ def train(train_iter, dev_iter, model, args):
                         save(model, args.save_dir, 'best', steps)
                 else:
                     if steps - last_step >= args.early_stop:
-                        print('early stop by {} steps.'.format(args.early_stop))
+                        print('early stop by {} steps.'.format(
+                            args.early_stop))
             elif steps % args.save_interval == 0:
                 save(model, args.save_dir, 'snapshot', steps)
 
 
-def eval(data_iter, model, args):
+@torch.no_grad()
+def eval(data_iter, model, args, device):
     model.eval()
     corrects, avg_loss = 0, 0
     for batch in data_iter:
         feature, target = batch.text, batch.label
-        feature.data.t_(), target.data.sub_(1)  # batch first, index align
-        if args.cuda:
-            feature, target = feature.cuda(), target.cuda()
+        feature.t_(), target.sub_(1)  # batch first, index align
+        feature = feature.to(device)
+        target = target.to(device)
 
         logit = model(feature)
         loss = F.cross_entropy(logit, target, size_average=False)
 
-        avg_loss += loss.data[0]
-        corrects += (torch.max(logit, 1)
-                     [1].view(target.size()).data == target.data).sum()
+        avg_loss += loss.item()
+        corrects += (torch.max(logit,
+                               1)[1].view(target.size()) == target).sum()
 
     size = len(data_iter.dataset)
     avg_loss /= size
-    accuracy = 100.0 * corrects/size
-    print('\nEvaluation - loss: {:.6f}  acc: {:.4f}%({}/{}) \n'.format(avg_loss, 
-                                                                       accuracy, 
-                                                                       corrects, 
-                                                                       size))
+    accuracy = 100.0 * corrects / size
+    print('\nEvaluation - loss: {:.6f}  acc: {:.4f}%({}/{}) \n'.format(
+        avg_loss, accuracy, corrects, size))
     return accuracy
 
 
-def predict(text, model, text_field, label_feild, cuda_flag):
+@torch.no_grad()
+def predict(text, model, text_field, label_feild, device):
     assert isinstance(text, str)
     model.eval()
     # text = text_field.tokenize(text)
     text = text_field.preprocess(text)
     text = [[text_field.vocab.stoi[x] for x in text]]
-    x = torch.tensor(text)
-    x = autograd.Variable(x)
-    if cuda_flag:
-        x = x.cuda()
-    print(x)
+    x = torch.LongTensor(text).to(device)
+
     output = model(x)
-    _, predicted = torch.max(output, 1)
-    #return label_feild.vocab.itos[predicted.data[0][0]+1]
-    return label_feild.vocab.itos[predicted.data[0]+1]
+    conf, predicted = torch.max(output, 1)
+    return label_feild.vocab.itos[predicted.item() + 1], conf
 
 
 def save(model, save_dir, save_prefix, steps):

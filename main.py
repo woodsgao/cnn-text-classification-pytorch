@@ -30,9 +30,6 @@ parser.add_argument('-embed-dim', type=int, default=128, help='number of embeddi
 parser.add_argument('-kernel-num', type=int, default=100, help='number of each kind of kernel')
 parser.add_argument('-kernel-sizes', type=str, default='3,4,5', help='comma-separated kernel size to use for convolution')
 parser.add_argument('-static', action='store_true', default=False, help='fix the embedding')
-# device
-parser.add_argument('-device', type=int, default=-1, help='device to use for iterate data, -1 mean cpu [default: -1]')
-parser.add_argument('-no-cuda', action='store_true', default=False, help='disable the gpu')
 # option
 parser.add_argument('-snapshot', type=str, default=None, help='filename of model snapshot [default: None]')
 parser.add_argument('-predict', type=str, default=None, help='predict the sentence given')
@@ -77,7 +74,6 @@ train_iter, dev_iter = mr(text_field, label_field, device=-1, repeat=False)
 # update args and print
 args.embed_num = len(text_field.vocab)
 args.class_num = len(label_field.vocab) - 1
-args.cuda = (not args.no_cuda) and torch.cuda.is_available(); del args.no_cuda
 args.kernel_sizes = [int(k) for k in args.kernel_sizes.split(',')]
 args.save_dir = os.path.join(args.save_dir, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
 
@@ -92,24 +88,22 @@ if args.snapshot is not None:
     print('\nLoading model from {}...'.format(args.snapshot))
     cnn.load_state_dict(torch.load(args.snapshot))
 
-if args.cuda:
-    torch.cuda.set_device(args.device)
-    cnn = cnn.cuda()
-        
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+cnn = cnn.to(device)
 
 # train or predict
 if args.predict is not None:
-    label = train.predict(args.predict, cnn, text_field, label_field, args.cuda)
+    label = train.predict(args.predict, cnn, text_field, label_field, device)
     print('\n[Text]  {}\n[Label] {}\n'.format(args.predict, label))
 elif args.test:
     try:
-        train.eval(test_iter, cnn, args) 
+        train.eval(test_iter, cnn, args, device) 
     except Exception as e:
         print("\nSorry. The test dataset doesn't  exist.\n")
 else:
     print()
     try:
-        train.train(train_iter, dev_iter, cnn, args)
+        train.train(train_iter, dev_iter, cnn, args, device)
     except KeyboardInterrupt:
         print('\n' + '-' * 89)
         print('Exiting from training early')
